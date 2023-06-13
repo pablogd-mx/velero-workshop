@@ -1,79 +1,68 @@
-### Build Clusters
-You can refer to any of our quickstarts:
-For Azure: https://github.com/pablogd-mx/azure-quickstart
 
-For AWS: https://github.com/ssahadevan-mendix/aws-mendix-quickstart
+### Build AKS Clusters (optional)
+``` 
+az aks create \
+        --resource-group ${AZ_RESOURCE_GROUP} \
+        --name ${AZ_CLUSTER_NAME} \
+        --generate-ssh-keys \
+        --vm-set-type VirtualMachineScaleSets \
+        --node-vm-size ${AZ_VM_SIZE} \
+        --load-balancer-sku standard \
+        --enable-managed-identity \
+        --node-count 2 \
+        --zones 1 
+```
+## Installing Velero Client
+This must be installed in the machine you are issuing the velero command from
 
-For GCP: https://github.com/pablogd-mx/gcp-quickstart
-
-
-### Installing Velero Client
 https://velero.io/docs/v1.8/basic-install/
 
-### Velero driver for EKS
+## Installing Minio
 
-https://github.com/vmware-tanzu/velero-plugin-for-aws
+Refer to this page for how to install Minio: https://min.io/
 
+## Configuring Minio for Velero 
+For official Azure documentation on Velero for AKS, refer to: https://learn.microsoft.com/en-us/azure/aks/hybrid/backup-workload-cluster#install-velero-with-minio-storage
 
-## Creating a new S3 Bucket to Store Velero Backups.
+1. Create a MinIO credentials file with the following information:
+
+minio.credentials 
 ```
-BUCKET=<YOUR_BUCKET>
-REGION=<YOUR_REGION>
-aws s3api create-bucket \
-    --bucket $BUCKET \
-    --region $REGION \
-    --create-bucket-configuration LocationConstraint=$REGION
-```
-```
-BUCKET=veleros3dr
-REGION=eu-west-2
-aws s3api create-bucket \
-    --bucket $BUCKET \
-    --region $REGION \
-    --create-bucket-configuration LocationConstraint=$REGION
-```
-## Create IAM user ( optional but highly recommended)
-```
-aws iam create-user --user-name velero
+[default] 
+  aws_access_key_id=<minio_access_key> 
+  aws_secret_access_key=<minio_secret_key>
 ```
 
-## Attach Policy to velero user to access S3 bucket ( see policy example in link above)
+
+## Installing Velero Controller
+
+This controller will create a new namespace called "velero" within your AKS cluster. Also notice that I am using the aws plugin since my Velero bucket will be Minio. If you are planning to use Blob storage, refer to the links above for the proper command 
+
+
+``` 
+velero install --provider aws --bucket velero-backup --secret-file $VELERO_CREDENTIALS --backup-location-config region=minio,s3ForcePathStyle=true,s3Url=[YourBucketforVelero] --plugins velero/velero-plugin-for-aws:v1.7.0
+```
+
+Example
+```
+ velero install --provider aws --bucket velero-backup --secret-file $VELERO_CREDENTIALS --backup-location-config region=minio,s3ForcePathStyle=true,s3Url=http://20.229.42.74:9000 --plugins velero/velero-plugin-for-aws:v1.7.0
+```
+
+## Mx4PC - Scale down deployments
+```
+kubectl scale deployment mendix-operator --replicas=0
+deployment.apps/mendix-operator scaled
+```
 
 ```
-aws iam put-user-policy \
-  --user-name velero \
-  --policy-name velero \
-  --policy-document file://velero-policy.json
+kubectl scale deployment mendix-agent --replicas=0
+deployment.apps/mendix-agent scaled
 ```
+### Creating a new Velero backup
 
-## Create an access key for the user
-aws iam create-access-key --user-name velero
-
-## Installing Velero into K8s cluster.
-### Make sure it's version 1.5.0 or higher, otherwise it won't work with Mx4PC.
 ```
-velero install \
-    --provider aws \
-    --plugins velero/velero-plugin-for-aws:v1.5.0 \
-    --bucket $BUCKET \
-    --backup-location-config region=$REGION \
-    --snapshot-location-config region=$REGION \
-    --secret-file ./credentials-velero
-```
-## Create a new backup location ( optional but highly recommended)
-### First create a secret with Velero Credentials obtained in previous step
-```
-kubectl create secret generic -n velero [nameofyoursecret] --from-file=aws=credentials-velero
-
-Example:
-kubectl create secret generic -n velero bsl-credentials --from-file=aws=credentials-velero
-```
-### Create a new backup location
-```
-velero backup create [nameofbackup] --storage-location [nameofstoragelocation]
-
-velero backup create mendix-full --storage-location bsl-mendix
-```
+velero create backup aks-workshop-june
+``` 
 
 ### Restoring from Backup
 ```
@@ -81,5 +70,11 @@ velero restore create --from-backup [nameofbackup] --status-include-resources=st
 ```
 ```
 Example:
-velero restore create --from-backup demo-mxdr --status-include-resources=storageinstances.privatecloud.mendix.com,storageplans.privatecloud.mendix.com,builds.privatecloud.mendix.com,mendixapps.privatecloud.mendix.com
+velero restore create --from-backup aks-velero-june --status-include-resources=storageinstances.privatecloud.mendix.com,storageplans.privatecloud.mendix.com,builds.privatecloud.mendix.com,mendixapps.privatecloud.mendix.com
 ```
+
+## Patching StorageInstance
+
+After completing the restore, add finalizers to StorageInstances (this step is optional, but highly recommended to ensure that Kubernetes garbage collection will clean up storage from deleted environments)
+
+kubectl patch storageinstances $(kubectl get storageinstances --no-headers -o custom-columns=":metadata.name") -p '{"metadata":{"finalizers":["finalizer.privatecloud.mendix.com"]}}' --type=merge
