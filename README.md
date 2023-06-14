@@ -77,4 +77,6 @@ velero restore create --from-backup aks-velero-june --status-include-resources=s
 
 After completing the restore, add finalizers to StorageInstances (this step is optional, but highly recommended to ensure that Kubernetes garbage collection will clean up storage from deleted environments)
 
+```
 kubectl patch storageinstances $(kubectl get storageinstances --no-headers -o custom-columns=":metadata.name") -p '{"metadata":{"finalizers":["finalizer.privatecloud.mendix.com"]}}' --type=merge
+```
